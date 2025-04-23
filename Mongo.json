@@ -1,0 +1,5 @@
+{
+    "message_id": "String - Unique identifier for the message",
+    "feedback": "String - Feedback on the message (optional)",
+    "comments": "Array - List of comments on the message (optional)"
+}
