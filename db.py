@@ -87,9 +87,28 @@ def extract_chat_histories(collection):
             for session in sessions:
                 session_id = str(session.get('session_id', 'unknown'))
                 chat_history = session.get('chat_history', [])
-                
-                # Store the session data
-                all_chats[user_id][session_id] = chat_history
+                # Annotate each message with explicit sequence number and ensure timestamp exists
+                for idx, msg in enumerate(chat_history):
+                    if isinstance(msg, dict):
+                        # Fallback timestamp if missing or empty
+                        if not msg.get('timestamp'):
+                            msg['timestamp'] = datetime.utcnow().isoformat()
+                        # Explicit sequence index
+                        msg['sequence'] = idx
+                        msg['message_id'] = f"{user_id}_{session_id}_{idx}"
+                projects = session.get('projects', [])
+                tasks = session.get('tasks', [])
+                email_thread_chain = session.get('email_thread_chain', [])
+                email_thread_id = session.get('email_thread_id', None)
+
+                # Store the session data as a dict with all fields
+                all_chats[user_id][session_id] = {
+                    'chat_history': chat_history,
+                    'projects': projects,
+                    'tasks': tasks,
+                    'email_thread_chain': email_thread_chain,
+                    'email_thread_id': email_thread_id
+                }
                 
                 session_count += 1
             user_count += 1
@@ -152,13 +171,15 @@ def save_to_csv(data, filename=None, output_dir="chat_exports"):
     flattened_data = []
     for user_id, sessions in data.items():
         for session_id, chat_history in sessions.items():
-            for message in chat_history:
+            for message in chat_history['chat_history']:
                 entry = {
                     'user_id': user_id,
                     'session_id': session_id,
                     'timestamp': message.get('timestamp', ''),
                     'role': message.get('role', ''),
-                    'content': message.get('content', '')
+                    'content': message.get('content', ''),
+                    'sequence': message.get('sequence', ''),
+                    'message_id': message.get('message_id', '')
                 }
                 flattened_data.append(entry)
     
@@ -223,7 +244,7 @@ def get_collection_stats(collection):
 
 # Example usage
 if __name__ == "__main__":
-    collection = connect_to_mongodb()
+    client, collection = connect_to_mongodb()
     if collection:
         stats = get_collection_stats(collection)
         print(f"Collection stats: {stats}")

@@ -6,7 +6,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Layout } from "./components/layout/Layout";
 import Dashboard from "./pages/Dashboard";
 import Interactions from "./pages/Interactions";
-import Agents from "./pages/Agents";
+import Data from "./pages/Agents";
+import FeedbackIntelligence from "./pages/FeedbackIntelligence";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 
@@ -22,7 +23,8 @@ const App = () => (
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/interactions" element={<Interactions />} />
-            <Route path="/agents" element={<Agents />} />
+            <Route path="/data" element={<Data />} />
+            <Route path="/feedback-intelligence" element={<FeedbackIntelligence />} />
             <Route path="/settings" element={<Settings />} />
           </Route>
           <Route path="*" element={<NotFound />} />

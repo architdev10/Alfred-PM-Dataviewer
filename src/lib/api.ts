@@ -79,17 +79,21 @@ export async function postRating(messageId: string, rating: 'good' | 'bad' | nul
  * Get message data by ID
  */
 export async function getMessage(messageId: string): Promise<MessageData> {
-  console.log(`API: Fetching message data for ID: ${messageId}`);
-  
-  const response = await fetch(ENDPOINTS.MESSAGE(messageId));
-  
-  if (!response.ok) {
-    throw new Error(`Failed to fetch message (${response.status})`);
+  try {
+    console.log(`API: Fetching message data for ID: ${messageId}`);
+    const response = await fetch(ENDPOINTS.MESSAGE(messageId));
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`API: Failed to fetch message data (${response.status}): ${text}`);
+      throw new Error(`Failed to fetch message data (${response.status})`);
+    }
+    const data = await response.json() as MessageData;
+    console.log(`API: Retrieved message data for ${data.id}:`, data);
+    return data;
+  } catch (error) {
+    console.error('API: Error in getMessage():', error);
+    throw error;
   }
-  
-  const data = await response.json() as MessageData;
-  console.log(`API: Retrieved message data with ${data.comments?.length || 0} comments`);
-  return data;
 }
 
 /**

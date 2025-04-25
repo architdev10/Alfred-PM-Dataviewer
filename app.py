@@ -2,6 +2,7 @@ from flask import Flask, jsonify, render_template, request
 import json
 import os
 from db import connect_to_mongodb, extract_chat_histories, save_to_json, MONGO_CLIENT, MONGO_COLLECTION
+from api.analytics import analytics
 
 # Initialize MongoDB once at startup
 db_client, _ = connect_to_mongodb()
@@ -10,6 +11,7 @@ if db_client is None:
 db = db_client[MONGO_CLIENT]
 
 app = Flask(__name__, static_folder='static')
+app.register_blueprint(analytics, url_prefix='/api')
 
 # Path to the JSON file containing chat histories
 # .
@@ -73,7 +75,8 @@ def get_user_sessions(user_id):
     
     # Get all sessions for this user
     for session_id in chat_data[user_id].keys():
-        messages = chat_data[user_id][session_id]
+        session_data = chat_data[user_id][session_id]
+        messages = session_data.get('chat_history', [])
         # Calculate message count and timestamps
         message_count = len(messages)
         created_at = "Unknown"
@@ -120,7 +123,12 @@ def get_session_chat(user_id, session_id):
         return jsonify([]), 200
     
     # Merge with feedback DB
-    raw_msgs = chat_data[user_id][session_id]
+    session_data = chat_data[user_id][session_id]
+    raw_msgs = session_data.get('chat_history', [])
+    projects = session_data.get('projects', [])
+    tasks = session_data.get('tasks', [])
+    email_thread_chain = session_data.get('email_thread_chain', [])
+    email_thread_id = session_data.get('email_thread_id', None)
     fb_coll = db['alfred_feedback']
     
     # build or extract message_ids
@@ -145,12 +153,15 @@ def get_session_chat(user_id, session_id):
     fb_map = {doc['message_id']: doc for doc in fb_docs}
     
     # Merge messages with feedback
-    merged = []
+    merged_msgs = []
     for i, m in enumerate(raw_msgs):
         msg_id = m.get('message_id') or msg_ids[i]
         ts = m.get('timestamp', 'Unknown time')
         if isinstance(ts, dict) and 'date' in ts:
             ts = ts['date']
+        # Normalize timestamp to ISO string if datetime object
+        if hasattr(ts, 'isoformat'):
+            ts = ts.isoformat()
         
         # Get feedback doc or empty dict if not found
         doc_fb = fb_map.get(msg_id, {})
@@ -162,12 +173,32 @@ def get_session_chat(user_id, session_id):
             'content': m.get('content', ''),
             'timestamp': ts,
             'feedback': doc_fb.get('feedback'),
-            'comments': doc_fb.get('comments', [])
+            'comments': doc_fb.get('comments', []),
+            'sequence': m.get('sequence', i)
         }
         
         print(f"Merged message {i}: {msg_id} - role: {msg_data['role']}, comments: {msg_data['comments']}")
-        merged.append(msg_data)
-    return jsonify(merged)
+        merged_msgs.append(msg_data)
+    # Sort messages by sequence number first (most reliable), then by timestamp as fallback
+    try:
+        # First try to sort by sequence number which is most reliable
+        merged_msgs.sort(key=lambda x: x.get('sequence', float('inf')))
+    except Exception as e:
+        print(f"Error sorting messages by sequence: {e}")
+        # Fallback: try to sort by timestamp
+        try:
+            merged_msgs.sort(key=lambda x: x.get('timestamp', ''))
+        except Exception as e:
+            print(f"Error sorting messages by timestamp: {e}")
+
+    # Return all structured session data to frontend
+    return jsonify({
+        'messages': merged_msgs,
+        'projects': projects,
+        'tasks': tasks,
+        'email_thread_chain': email_thread_chain,
+        'email_thread_id': email_thread_id
+    })
 
 @app.route('/api/chat_histories')
 def chat_histories():
@@ -189,7 +220,8 @@ def get_interactions():
     interactions = []
     try:
         for user_id, sessions in chat_data.items():
-            for session_id, messages in sessions.items():
+            for session_id, session_data in sessions.items():
+                messages = session_data.get('chat_history', [])
                 for i, message in enumerate(messages):
                     if i + 1 < len(messages):
                         if message.get('role') == 'user' and messages[i+1].get('role') == 'assistant':
@@ -199,7 +231,7 @@ def get_interactions():
                                 timestamp = timestamp['date']
                                 
                             interactions.append({
-                                'id': f"{user_id}_{session_id}_{i}",
+                                'id': message.get('message_id'),
                                 'userPrompt': message.get('content', ''),
                                 'aiResponse': messages[i+1].get('content', ''),
                                 'timestamp': timestamp,
@@ -267,6 +299,49 @@ def add_comment():
     except Exception as e:
         print(f"Error saving comment: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/message/<message_id>')
+def get_message_feedback(message_id):
+    try:
+        # Parse user_id and session_id from message_id
+        parts = message_id.split('_')
+        if len(parts) < 2:
+            print(f"Invalid message ID format: {message_id}")
+            return jsonify({"error": "Invalid message ID format"}), 400
+            
+        user_id = parts[0]
+        session_id = parts[1]
+        
+        # Query feedback collection
+        fb_coll = db['alfred_feedback']
+        doc = fb_coll.find_one({'message_id': message_id})
+        print(f"Fetched feedback for message {message_id}: {doc}")
+        
+        # Fetch original message data
+        chat_data = load_chat_data()
+        session_data = chat_data.get(user_id, {}).get(session_id, {})
+        messages = session_data.get('chat_history', [])
+        message_obj = next((m for m in messages if m.get('message_id') == message_id), None)
+        role = message_obj.get('role') if message_obj else None
+        content = message_obj.get('content') if message_obj else None
+        timestamp = message_obj.get('timestamp') if message_obj else None
+        
+        # Prepare combined response
+        rating = doc.get('feedback') if doc else None
+        comments = doc.get('comments', []) if doc else []
+        
+        return jsonify({
+            'id': message_id,
+            'role': role,
+            'content': content,
+            'timestamp': timestamp,
+            'feedback': rating,
+            'comments': comments
+        }), 200
+    except Exception as e:
+        print(f"Error retrieving message feedback: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 # Enable CORS
 @app.after_request

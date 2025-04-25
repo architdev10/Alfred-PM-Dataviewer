@@ -132,34 +132,31 @@ export default function Interactions() {
     setHasCommentsFilter(null);
   };
   
-  useEffect(() => {
-    const fetchInteractions = async () => {
-      setLoading(true);
-      setError(null);
-      
-      try {
-        // Using the Flask API endpoint
-        const response = await fetch('http://127.0.0.1:3002/api/interactions');
-        
-        if (!response.ok) {
-          throw new Error(`API error: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        setInteractions(data);
-        setTotalPages(Math.ceil(data.length / itemsPerPage));
-      } catch (err) {
-        console.error('Failed to fetch interactions:', err);
-        setError('Failed to load interactions. Using mock data instead.');
-        setInteractions(mockInteractions);
-      } finally {
-        setLoading(false);
+  // Hoisted fetchInteractions for auto-refresh
+  const fetchInteractions = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch('http://127.0.0.1:3002/api/interactions');
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
       }
-    };
-    
+      const data = await response.json();
+      setInteractions(data);
+      setTotalPages(Math.ceil(data.length / itemsPerPage));
+    } catch (err) {
+      console.error('Failed to fetch interactions:', err);
+      setError('Failed to load interactions. Using mock data instead.');
+      setInteractions(mockInteractions);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchInteractions();
   }, []);
-  
+
   // Apply all filters to interactions
   const filteredInteractions = interactions.filter(interaction => {
     // Legacy filter (from dropdown)
@@ -208,13 +205,22 @@ export default function Interactions() {
     return true;
   });
   
-  // Sort interactions based on selected sort order
+  // Sort interactions based on selected sort order (with robust timestamp parsing)
+  const parseTs = (ts: string) => {
+    const ms = Date.parse(ts);
+    return isNaN(ms) ? 0 : ms;
+  };
   const sortedInteractions = [...filteredInteractions].sort((a, b) => {
-    if (sortOrder === 'newest') {
-      return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-    } else {
-      return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+    const aVal = parseTs(a.timestamp);
+    const bVal = parseTs(b.timestamp);
+    // Primary sort by timestamp
+    if (aVal !== bVal) {
+      return sortOrder === 'newest' ? bVal - aVal : aVal - bVal;
     }
+    // Fallback to array index order if timestamps equal
+    const aIdx = filteredInteractions.indexOf(a);
+    const bIdx = filteredInteractions.indexOf(b);
+    return sortOrder === 'newest' ? bIdx - aIdx : aIdx - bIdx;
   });
   
   // Paginate interactions
@@ -563,6 +569,7 @@ export default function Interactions() {
                     rating={interaction.rating}
                     comments={interaction.comments}
                     user={interaction.user}
+                    onUpdate={fetchInteractions}
                   />
                 ))}
               </div>

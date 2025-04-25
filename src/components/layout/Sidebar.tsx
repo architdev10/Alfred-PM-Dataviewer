@@ -1,4 +1,3 @@
-
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -31,8 +30,8 @@ const navItems: NavItem[] = [
     icon: MessageSquareText,
   },
   {
-    title: "Agents",
-    href: "/agents",
+    title: "Data",
+    href: "/data",
     icon: ListFilter,
   },
   {
