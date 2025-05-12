@@ -28,6 +28,8 @@ type Interaction = {
   aiResponse: string;
   rating?: string;
   comments?: string[];
+  function_name?: string;
+  function_response?: string;
 };
 
 export default function Data() {
@@ -68,6 +70,8 @@ export default function Data() {
             return item.rating === map[filterValue] || (!item.rating && filterValue === '-');
           }
           case 'comment': return item.comments?.some(c => c.toLowerCase().includes(val));
+          case 'function_name': return item.function_name?.toLowerCase().includes(val);
+          case 'function_response': return item.function_response?.toLowerCase().includes(val);
           case 'commentCount': return (item.comments?.length || 0) === Number(filterValue);
           case 'userId': return item.user?.name.toLowerCase().includes(val);
           case 'id': return item.id.toLowerCase().includes(val);
@@ -85,6 +89,8 @@ export default function Data() {
           case 'feedback': va = a.rating||''; vb = b.rating||''; break;
           case 'comment': va = a.comments?.join(' ')||''; vb = b.comments?.join(' ')||''; break;
           case 'commentCount': va = a.comments?.length||0; vb = b.comments?.length||0; break;
+          case 'function_name': va = a.function_name||''; vb = b.function_name||''; break;
+          case 'function_response': va = a.function_response||''; vb = b.function_response||''; break;
           case 'userId': va = a.user?.name||''; vb = b.user?.name||''; break;
           case 'id': va = a.id; vb = b.id; break;
           case 'timestamp': va = new Date(a.timestamp).getTime(); vb = new Date(b.timestamp).getTime(); break;
@@ -128,6 +134,8 @@ export default function Data() {
                   <SelectItem value="message">Message</SelectItem>
                   <SelectItem value="response">Response</SelectItem>
                   <SelectItem value="feedback">Feedback</SelectItem>
+                  <SelectItem value="function_name">Function Name</SelectItem>
+                  <SelectItem value="function_response">Function Response</SelectItem>
                   <SelectItem value="comment">Comment</SelectItem>
                   <SelectItem value="commentCount">Comment Count</SelectItem>
                   <SelectItem value="userId">User ID</SelectItem>
@@ -153,7 +161,7 @@ export default function Data() {
                   <Input value={filterValue} onChange={e=>setFilterValue(e.target.value)} placeholder="Value" className="w-1/3" />
                 )
               )}
-              <Button onClick={() => {}} >Apply</Button>
+              <Button onClick={() => {}}>Apply</Button>
               <Button variant="outline" onClick={() => { setFilterField(''); setFilterValue(''); }} >Clear</Button>
             </div>
             <ScrollArea>
@@ -163,6 +171,8 @@ export default function Data() {
                     <TableHead><button onClick={()=>handleSort('message')} className="flex items-center">Message{sortBy==='message'?(sortDirection==='asc'?' ↑':' ↓'):''}</button></TableHead>
                     <TableHead><button onClick={()=>handleSort('response')} className="flex items-center">Response{sortBy==='response'?(sortDirection==='asc'?' ↑':' ↓'):''}</button></TableHead>
                     <TableHead><button onClick={()=>handleSort('feedback')} className="flex items-center">Feedback{sortBy==='feedback'?(sortDirection==='asc'?' ↑':' ↓'):''}</button></TableHead>
+                    <TableHead><button onClick={()=>handleSort('function_name')} className="flex items-center">Function Name{sortBy==='function_name'?(sortDirection==='asc'?' ↑':' ↓'):''}</button></TableHead>
+                    <TableHead><button onClick={()=>handleSort('function_response')} className="flex items-center">Function Response{sortBy==='function_response'?(sortDirection==='asc'?' ↑':' ↓'):''}</button></TableHead>
                     <TableHead><button onClick={()=>handleSort('comment')} className="flex items-center">Comment{sortBy==='comment'?(sortDirection==='asc'?' ↑':' ↓'):''}</button></TableHead>
                     <TableHead><button onClick={()=>handleSort('commentCount')} className="flex items-center">Comment Count{sortBy==='commentCount'?(sortDirection==='asc'?' ↑':' ↓'):''}</button></TableHead>
                     <TableHead><button onClick={()=>handleSort('userId')} className="flex items-center">User ID{sortBy==='userId'?(sortDirection==='asc'?' ↑':' ↓'):''}</button></TableHead>
@@ -173,11 +183,11 @@ export default function Data() {
                 <TableBody>
                   {loading ? (
                     <TableRow>
-                      <TableCell colSpan={8}>Loading...</TableCell>
+                      <TableCell colSpan={10}>Loading...</TableCell>
                     </TableRow>
                   ) : error ? (
                     <TableRow>
-                      <TableCell colSpan={8}>{error}</TableCell>
+                      <TableCell colSpan={10}>{error}</TableCell>
                     </TableRow>
                   ) : (
                     processedData.map((item) => (
@@ -211,6 +221,38 @@ export default function Data() {
                           )}
                         </TableCell>
                         <TableCell>{item.rating === 'good' ? 'Like' : item.rating === 'bad' ? 'Dislike' : item.rating || '-'}</TableCell>
+                        <TableCell>
+                          {item.function_name ? (
+                            item.function_name.length > 50 ? (
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <button className="text-left w-full truncate">{`${item.function_name.slice(0,50)}...`}</button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-64 whitespace-pre-wrap">
+                                  {item.function_name}
+                                </PopoverContent>
+                              </Popover>
+                            ) : (
+                              item.function_name
+                            )
+                          ) : '-'}
+                        </TableCell>
+                        <TableCell>
+                          {item.function_response ? (
+                            item.function_response.length > 50 ? (
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <button className="text-left w-full truncate">{`${item.function_response.slice(0,50)}...`}</button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-64 whitespace-pre-wrap">
+                                  {item.function_response}
+                                </PopoverContent>
+                              </Popover>
+                            ) : (
+                              item.function_response
+                            )
+                          ) : '-'}
+                        </TableCell>
                         <TableCell>{item.comments && item.comments.length > 0 ? item.comments.join(', ') : '-'}</TableCell>
                         <TableCell>{item.comments ? item.comments.length : 0}</TableCell>
                         <TableCell>{item.user?.name || 'N/A'}</TableCell>

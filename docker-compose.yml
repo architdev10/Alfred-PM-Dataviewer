@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "5001:5001"
+    environment:
+      - FLASK_ENV=production
+      # Add your MongoDB connection string here if needed
+      - MONGO_URI=mongodb://alfred:alfred-coco-cola@172.178.91.142:27017/alfred-coco-cola?authSource=alfred-coco-cola
+    depends_on: []
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "3000:80"
+    environment:
+      # Set your API URL for the frontend to reach the backend
+      - VITE_API_URL=http://localhost:5001
+    depends_on:
+      - backend

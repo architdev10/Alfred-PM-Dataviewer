@@ -1,4 +1,3 @@
-
 import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ResponsiveContainer, PieChart, Pie, Cell, Legend, Tooltip } from "recharts";
@@ -25,8 +24,20 @@ export function DonutChart({
   height = 300,
 }: DonutChartProps) {
   const chartData = useMemo(() => {
-    return data;
-  }, [data]);
+    // Log the incoming data
+    console.log(`DonutChart "${title}" received data:`, data);
+    
+    // Filter out any items with zero values as they can cause rendering issues
+    const filteredData = data.filter(item => item.value > 0);
+    
+    // If all values are zero, create a placeholder item
+    if (filteredData.length === 0) {
+      console.log(`DonutChart "${title}" has no non-zero values, adding placeholder`);
+      return [{ name: "No Data", value: 100, color: "#94a3b8" }];
+    }
+    
+    return filteredData;
+  }, [data, title]);
 
   return (
     <Card>
@@ -47,7 +58,7 @@ export function DonutChart({
               labelLine={false}
               label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
             >
-              {data.map((entry, index) => (
+              {chartData.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={entry.color} />
               ))}
             </Pie>

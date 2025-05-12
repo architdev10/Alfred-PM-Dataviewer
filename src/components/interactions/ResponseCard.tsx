@@ -19,6 +19,7 @@ interface ResponseCardProps {
     avatar?: string;
   };
   className?: string;
+  onUpdate?: () => void;
 }
 
 export function ResponseCard({
