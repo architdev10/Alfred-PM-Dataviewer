@@ -21,6 +21,7 @@ MONGO_COLLECTION = 'email_threads'
 MONGO_HOST = '172.178.91.142'
 MONGO_PORT = 27017
 
+# connects to email threads collection and retrieves the chat histories. 
 
 def connect_to_mongodb(collection_name=None):
     """
@@ -95,7 +96,6 @@ def extract_chat_histories(collection):
                             msg['timestamp'] = datetime.utcnow().isoformat()
                         # Explicit sequence index
                         msg['sequence'] = idx
-                        msg['message_id'] = f"{user_id}_{session_id}_{idx}"
                 projects = session.get('projects', [])
                 tasks = session.get('tasks', [])
                 email_thread_chain = session.get('email_thread_chain', [])

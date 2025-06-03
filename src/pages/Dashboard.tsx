@@ -49,102 +49,120 @@ export default function Dashboard() {
   ]);
 
   // Fetch analytics data
-  useEffect(() => {
-    const fetchAnalytics = async () => {
-      setLoading(true);
-      setError(null);
-      
-      try {
-        // Fetch overall satisfaction statistics
-        const statsResponse = await fetch(`${API_BASE_URL}/api/stats`);
-        if (!statsResponse.ok) throw new Error('Failed to fetch overall stats');
-        const statsData = await statsResponse.json();
-        
-        // Set metrics from stats API
-        setStatsData(statsData);
-        setActiveUsers(statsData.activeUsers);
-        setTotalInteractions(statsData.totalInteractions);
-        setResponseRate(statsData.responseRate);
-        setTotalComments(statsData.commentsCount);
-        
-        // Fetch ratings distribution
-        const ratingsResponse = await fetch(`${API_BASE_URL}/api/ratings`);
-        if (!ratingsResponse.ok) throw new Error('Failed to fetch ratings');
-        const ratingsData = await ratingsResponse.json();
-        
-        // Calculate satisfaction ratio
-        const totalRatings = ratingsData.good + ratingsData.bad + ratingsData.neutral;
-        const satRatio = totalRatings > 0 ? (ratingsData.good / totalRatings) * 100 : 0;
-        setSatisfactionRatio(Math.round(satRatio));
-        
-        // Set rating distribution for donut chart
-        setRatingDistribution([
-          { name: "Good", value: ratingsData.good, color: "#22c55e" },
-          { name: "Bad", value: ratingsData.bad, color: "#ef4444" },
-          { name: "No Rating", value: ratingsData.neutral, color: "#94a3b8" }
-        ]);
-        
-        // Set likes and dislikes
-        setLikes(ratingsData.good);
-        setDislikes(ratingsData.bad);
-        
-        // Fetch interactions to get comments data
-        const interactionsResponse = await fetch(`${API_BASE_URL}/api/interactions`);
-        if (!interactionsResponse.ok) throw new Error('Failed to fetch interactions');
-        const interactionsData = await interactionsResponse.json();
-        
-        // Filter interactions with comments
-        const messagesWithComments = interactionsData.filter(interaction => 
-          interaction.comments && interaction.comments.length > 0
-        );
-        
-        // Set messages with comments for dropdown
-        setCommentMessages(messagesWithComments.map(msg => ({
-          id: msg.id,
-          text: msg.aiResponse ? 
-            (msg.aiResponse.substring(0, 50) + (msg.aiResponse.length > 50 ? '...' : '')) : 
-            'No response text',
-          comments: msg.comments ? msg.comments.length : 0
-        })));
-        
-        // Fetch feedback trends data
-        const trendsResponse = await fetch(`${API_BASE_URL}/api/interactions-over-time?period=${timePeriod}`);
-        if (trendsResponse.ok) {
-          const trendsData = await trendsResponse.json();
-          setFeedbackTrends(trendsData);
-        }
-        
-        // Fetch comment activity data
-        const commentActivityResponse = await fetch(`${API_BASE_URL}/api/comment-activity?period=${timePeriod}`);
-        if (commentActivityResponse.ok) {
-          const commentActivityData = await commentActivityResponse.json();
-          setCommentActivity(commentActivityData);
-        }
-        
-        // Fetch user ratios data
-        const userRatiosResponse = await fetch(`${API_BASE_URL}/api/user-ratios`);
-        if (userRatiosResponse.ok) {
-          const userRatiosData = await userRatiosResponse.json();
-          setUserRatios(userRatiosData);
-        }
-        
-      } catch (err) {
-        console.error('Error fetching analytics data:', err);
-        setError('Failed to load analytics data');
-      } finally {
-        setLoading(false);
-      }
-    };
+  const fetchAnalytics = async () => {
+    setLoading(true);
+    setError(null);
     
+    try {
+      // Fetch overall satisfaction statistics
+      const statsResponse = await fetch(`${API_BASE_URL}/api/stats`);
+      if (!statsResponse.ok) throw new Error('Failed to fetch overall stats');
+      const statsData = await statsResponse.json();
+      
+      // Set metrics from stats API
+      setStatsData(statsData);
+      setActiveUsers(statsData.activeUsers || 0);
+      
+      // Ensure totalInteractions is a valid number
+      const interactions = typeof statsData.totalInteractions === 'number' 
+        ? statsData.totalInteractions 
+        : parseInt(statsData.totalInteractions) || 0;
+      
+      setTotalInteractions(interactions);
+      setResponseRate(statsData.responseRate);
+      setTotalComments(statsData.commentsCount);
+      
+      // Fetch ratings distribution
+      const ratingsResponse = await fetch(`${API_BASE_URL}/api/ratings`);
+      if (!ratingsResponse.ok) throw new Error('Failed to fetch ratings');
+      const ratingsData = await ratingsResponse.json();
+      
+      // Debug the ratings data
+      console.log("Ratings data received:", ratingsData);
+      
+      // Calculate satisfaction ratio
+      const totalRatings = ratingsData.good + ratingsData.bad + ratingsData.neutral;
+      const satRatio = totalRatings > 0 ? (ratingsData.good / totalRatings) * 100 : 0;
+      setSatisfactionRatio(Math.round(satRatio));
+      
+      // Set rating distribution for donut chart
+      const newRatingDistribution = [
+        { name: "Good", value: ratingsData.good, color: "#22c55e" },
+        { name: "Bad", value: ratingsData.bad, color: "#ef4444" },
+        { name: "No Rating", value: ratingsData.neutral, color: "#94a3b8" }
+      ];
+      console.log("Setting rating distribution:", newRatingDistribution);
+      setRatingDistribution(newRatingDistribution);
+      
+      // Set likes and dislikes
+      setLikes(ratingsData.good);
+      setDislikes(ratingsData.bad);
+      
+      // Fetch interactions to get comments data
+      const interactionsResponse = await fetch(`${API_BASE_URL}/api/interactions`);
+      if (!interactionsResponse.ok) throw new Error('Failed to fetch interactions');
+      const interactionsData = await interactionsResponse.json();
+      
+      // Filter interactions with comments
+      const messagesWithComments = interactionsData.filter(interaction => 
+        interaction.comments && interaction.comments.length > 0
+      );
+      
+      // Set messages with comments for dropdown
+      setCommentMessages(messagesWithComments.map(msg => ({
+        id: msg.id,
+        text: msg.aiResponse ? 
+          (msg.aiResponse.substring(0, 50) + (msg.aiResponse.length > 50 ? '...' : '')) : 
+          'No response text',
+        comments: msg.comments ? msg.comments.length : 0
+      })));
+      
+      // Fetch feedback trends data
+      const trendsResponse = await fetch(`${API_BASE_URL}/api/interactions-over-time?period=${timePeriod}`);
+      if (trendsResponse.ok) {
+        const trendsData = await trendsResponse.json();
+        setFeedbackTrends(trendsData);
+      }
+      
+      // Fetch comment activity data
+      const commentActivityResponse = await fetch(`${API_BASE_URL}/api/comment-activity?period=${timePeriod}`);
+      if (commentActivityResponse.ok) {
+        const commentActivityData = await commentActivityResponse.json();
+        setCommentActivity(commentActivityData);
+      }
+      
+      // Fetch user ratios data
+      const userRatiosResponse = await fetch(`${API_BASE_URL}/api/user-ratios`);
+      if (userRatiosResponse.ok) {
+        const userRatiosData = await userRatiosResponse.json();
+        setUserRatios(userRatiosData);
+      }
+      
+    } catch (err) {
+      console.error('Error fetching analytics data:', err);
+      setError('Failed to load analytics data');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  useEffect(() => {
     fetchAnalytics();
   }, [timePeriod]); // Refetch when time period changes
   
   const refreshData = () => {
-    // Trigger a refresh of the analytics data
+    console.log("Manually refreshing dashboard data");
+    // Reset all state values to force a complete refresh
+    setActiveUsers(0);
+    setTotalInteractions(0);
+    setResponseRate(0);
+    setTotalComments(0);
+    setLikes(0);
+    setDislikes(0);
+    
+    // Set loading and trigger a fresh data fetch
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-    }, 1000);
+    fetchAnalytics();
   };
 
   return (

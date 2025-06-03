@@ -15,6 +15,7 @@ def get_all_interactions():
     """Return a flat list of all user→assistant interactions for the dashboard flat view"""
     try:
         docs = list(db.alfred_feedback.find({}))
+        docs1 = list(db.email_threads.distinct("user_id"))
         interactions = []
 
         for doc in docs:
@@ -28,18 +29,18 @@ def get_all_interactions():
             # Walk each session
             for session in doc.get('sessions', []):
                 sess_id = session.get('session_id', '')
-                history = session.get('chat_history', [])
+                messages = session.get('messages', [])
 
                 # Pair every user message with the next assistant message
-                for idx, entry in enumerate(history):
+                for idx, entry in enumerate(messages):
                     if entry.get('role') != 'user':
                         continue
 
                     user_msg = entry.get('content', '')
                     # Look ahead for assistant reply
                     ai_msg = ''
-                    if idx + 1 < len(history) and history[idx + 1].get('role') == 'assistant':
-                        ai_msg = history[idx + 1].get('content', '')
+                    if idx + 1 < len(messages) and messages[idx + 1].get('role') == 'assistant':
+                        ai_msg = messages[idx + 1].get('content', '')
 
                     interaction = {
                         "id": f"{user_id}_{sess_id}_{idx}",
@@ -99,28 +100,51 @@ def get_overall_stats():
         try:
             # Get all chat data
             collection = db[MONGO_COLLECTION]
+            
+            # Process each document
             cursor = collection.find({})
+            
+            # Reset counter for detailed counting
+            interaction_count = 0
             
             # Process each document
             for doc in cursor:
                 for session in doc.get('sessions', []):
-                    history = session.get('chat_history', [])
-                    # Count user messages that are followed by assistant responses
-                    for i in range(len(history) - 1):
-                        if history[i].get('role') == 'user' and history[i+1].get('role') == 'assistant':
-                            current_total_interactions += 1
+                    # Count chat_history elements in each session
+                    chat_history = session.get('chat_history', [])
+                    if chat_history and isinstance(chat_history, list):
+                        interaction_count += len(chat_history)
+            
+            # Use the interaction count we calculated
+            current_total_interactions = interaction_count
+                
+            # If we still have 0, check if we can get any value from alfred_feedback
+            if current_total_interactions == 0:
+                feedback_count = db.alfred_feedback.count_documents({})
+                if feedback_count > 0:
+                    current_total_interactions = feedback_count
+                
         except Exception as e:
             print(f"Error counting interactions: {e}")
+            current_total_interactions = 0  # Fallback value
         
         # Count unique users with feedback in current period
         current_interactions_query = {"timestamp": {"$gte": current_period_start}}
-        user_ids = db.alfred_feedback.distinct("message_id", {})
+        docs1 = list(db.email_threads.distinct("userid"))
+
+        print(docs1)
+
         unique_users = set()
-        for msg_id in user_ids:
-            parts = msg_id.split('_')
-            if len(parts) >= 1:
-                unique_users.add(parts[0])
-        current_active_users = len(unique_users)
+        current_active_users = 0
+        for doc in db.email_threads.find({}):
+            user_id = str(doc.get('userid'))
+            if user_id in docs1:
+                print(user_id)
+                current_active_users += 1
+                
+        # Ensure we have at least one active user
+        if current_active_users == 0:
+            current_active_users = 1
         
         # Count total comments (actual comment entries, not documents with comments)
         current_comments_count = 0
@@ -196,8 +220,6 @@ def get_overall_stats():
 @analytics.route('/ratings', methods=['GET'])
 def get_ratings():
     """Get the distribution of response ratings (good, bad, neutral)"""
-    # db = get_db()
-    
     # Get time period filter from query params (default: all time)
     days = request.args.get('days', default=0, type=int)
     
@@ -216,6 +238,18 @@ def get_ratings():
         good_count = sum(1 for i in interactions if i.get('feedback') == 'good')
         bad_count = sum(1 for i in interactions if i.get('feedback') == 'bad')
         neutral_count = sum(1 for i in interactions if i.get('feedback') is None)
+        
+        # Print debug information
+        print(f"Ratings data - Good: {good_count}, Bad: {bad_count}, Neutral: {neutral_count}")
+        
+        # If no ratings are found at all, use fallback data
+        # if good_count == 0 and bad_count == 0 and neutral_count == 0:
+        #     print("No ratings found in DB, using fallback data")
+        #     return jsonify({
+        #         'good': 75,
+        #         'bad': 15,
+        #         'neutral': 10
+        #     })
         
         return jsonify({
             'good': good_count,
@@ -364,20 +398,28 @@ def get_interactions_over_time():
 @analytics.route('/comment-activity', methods=['GET'])
 def get_comment_activity():
     """Get comment activity over time"""
-    # db = get_db()
-    
     # Get parameters
     period = request.args.get('period', default='monthly', type=str)  # daily, weekly, monthly
     limit = request.args.get('limit', default=7, type=int)  # Number of data points
     
     try:
-        # Get interactions data first (reuse that logic)
-        interactions_response = get_interactions_over_time()
-        interactions_data = interactions_response.get_json()
+        # Current date for reference
+        today = datetime.now()
         
-        # Calculate comment activity based on interactions
-        # In a real implementation, you'd query the database for actual comment counts
-        comment_data = []
+        # Get comment documents
+        comment_docs = list(db.alfred_feedback.find({"comments": {"$exists": True, "$ne": []}}))
+        
+        # Helper function to count comments for a time period
+        def count_comments_in_period(start_date, end_date):
+            comment_count = 0
+            for doc in comment_docs:
+                if "timestamp" in doc and isinstance(doc["timestamp"], datetime):
+                    if start_date <= doc["timestamp"] <= end_date:
+                        comment_count += len(doc.get("comments", []))
+            return comment_count
+        
+        # Initialize data points array
+        data_points = []
         
         if period == 'daily':
             # Generate data for the last N days
@@ -388,19 +430,12 @@ def get_comment_activity():
                 day_end = day_date.replace(hour=23, minute=59, second=59, microsecond=999999)
                 
                 # Count comments for this day
-                day_comment_count = 0
-                for doc in comment_docs:
-                    # Check if timestamp exists and is in range
-                    if "timestamp" in doc and isinstance(doc["timestamp"], datetime):
-                        if day_start <= doc["timestamp"] <= day_end:
-                            day_comment_count += len(doc.get("comments", []))
+                day_comment_count = count_comments_in_period(day_start, day_end)
                 
                 data_points.append({
                     "date": day_str,
                     "value": day_comment_count
                 })
-            
-            return jsonify(data_points)
             
         elif period == 'weekly':
             # Generate data for the last N weeks
@@ -409,70 +444,60 @@ def get_comment_activity():
                 week_start = week_end - timedelta(days=6)
                 
                 # Count comments for this week
-                week_comment_count = 0
-                for doc in comment_docs:
-                    # Check if timestamp exists and is in range
-                    if "timestamp" in doc and isinstance(doc["timestamp"], datetime):
-                        if week_start <= doc["timestamp"] <= week_end:
-                            week_comment_count += len(doc.get("comments", []))
+                week_comment_count = count_comments_in_period(week_start, week_end)
                 
                 data_points.append({
                     "date": f"W{i+1}",
                     "value": week_comment_count
                 })
             
-            return jsonify(data_points)
-            
         else:  # monthly (default)
             # Generate last N months
             for i in range(limit-1, -1, -1):
                 month_date = today - timedelta(days=30 * i)
-                month_name = month_date.strftime("%b")  # Short month name (e.g., "Apr")
                 
                 # This is a simplified approach - in production, you'd use proper month start/end dates
                 month_start = datetime(month_date.year, month_date.month, 1)
+                
+                # Get proper month end date
                 if month_date.month == 12:
                     month_end = datetime(month_date.year + 1, 1, 1) - timedelta(days=1)
                 else:
                     month_end = datetime(month_date.year, month_date.month + 1, 1) - timedelta(days=1)
                 
+                month_end = month_end.replace(hour=23, minute=59, second=59, microsecond=999999)
+                
                 # Count comments for this month
-                month_comment_count = 0
-                for doc in comment_docs:
-                    # Check if timestamp exists and is in range
-                    if "timestamp" in doc and isinstance(doc["timestamp"], datetime):
-                        if month_start <= doc["timestamp"] <= month_end:
-                            month_comment_count += len(doc.get("comments", []))
+                month_comment_count = count_comments_in_period(month_start, month_end)
                 
                 data_points.append({
-                    "date": month_name,
+                    "date": month_date.strftime("%b"),  # Short month name (e.g., "Apr")
                     "value": month_comment_count
                 })
-            
-            return jsonify(data_points)
+        
+        return jsonify(data_points)
+        
     except Exception as e:
         print(f"Error fetching comment activity: {e}")
-        # Return empty data instead of mock data
+        # Return empty data
         mock_data = []
-        
         today = datetime.now()
+        
         if period == 'daily':
-            # Last 7 days
-            for i in range(7):
+            # Last N days
+            for i in range(limit-1, -1, -1):
                 day = (today - timedelta(days=i)).strftime("%d %b")
                 mock_data.append({"date": day, "value": 0})
         elif period == 'weekly':
-            # Last 7 weeks
-            for i in range(7):
+            # Last N weeks
+            for i in range(limit-1, -1, -1):
                 mock_data.append({"date": f"W{i+1}", "value": 0})
         else:
-            # Last 7 months
-            months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"]
-            for month in months:
+            # Last N months
+            for i in range(limit-1, -1, -1):
+                month = (today - timedelta(days=30*i)).strftime("%b")
                 mock_data.append({"date": month, "value": 0})
         
-        # Reverse to have chronological order
-        mock_data.reverse()
         return jsonify(mock_data)
 
 @analytics.route('/response-quality', methods=['GET'])
@@ -612,10 +637,10 @@ def get_feedback_insights():
         for doc in db.alfred_feedback.find({"comments": {"$exists": True, "$ne": []}}):
             # Extract user ID from message_id
             msg_id = doc.get("message_id", "")
-            parts = msg_id.split('_')
-            if len(parts) >= 1:
-                user_id = parts[0]
-                user_comments[user_id] = user_comments.get(user_id, 0) + len(doc.get("comments", []))
+            # parts = msg_id.split('_')
+            # if len(parts) >= 1:
+            user_id = msg_id
+            user_comments[user_id] = user_comments.get(user_id, 0) + len(doc.get("comments", []))
         
         # Find most active user
         most_active_user = max(user_comments.items(), key=lambda x: x[1], default=("Unknown", 0))
@@ -679,151 +704,48 @@ def get_response_time():
         {"date": "Sun", "value": 1.7}
     ])
 
-# from flask import Blueprint, jsonify
-# from datetime import datetime, timedelta
-# import random
-# from db import connect_to_mongodb, MONGO_CLIENT
-# import pymongo
-
-# # Initialize MongoDB connection
-# client, _ = connect_to_mongodb()
-# db = client[MONGO_CLIENT]
-
-# # Create Blueprint for analytics routes
-# analytics = Blueprint('analytics', __name__)
-
-# @analytics.route('/ratings', methods=['GET'])
-# def get_ratings():
-#     """Get the distribution of response ratings (good, bad, neutral)"""
-#     # db = get_db()
-    
-#     # Query to count ratings
-#     try:
-#         # Get all interactions with ratings
-#         interactions = list(db.interactions.find({}, {"rating": 1}))
+@analytics.route('/chat-message-counts', methods=['GET'])
+def get_chat_message_counts():
+    """Get total count of all messages in chat histories across all sessions"""
+    try:
+        # Get collection from MongoDB
+        from db import MONGO_COLLECTION
+        collection = db[MONGO_COLLECTION]
         
-#         # Count ratings
-#         good_count = sum(1 for i in interactions if i.get('rating') == 'good')
-#         bad_count = sum(1 for i in interactions if i.get('rating') == 'bad')
-#         neutral_count = sum(1 for i in interactions if i.get('rating') is None)
+        # Initialize counters
+        total_messages = 0
+        total_sessions = 0
+        sessions_with_messages = 0
         
-#         return jsonify({
-#             'good': good_count,
-#             'bad': bad_count,
-#             'neutral': neutral_count
-#         })
-#     except Exception as e:
-#         print(f"Error fetching ratings: {e}")
-#         # Return mock data if DB query fails
-#         return jsonify({
-#             'good': 75,
-#             'bad': 15,
-#             'neutral': 10
-#         })
-
-# @analytics.route('/interactions-over-time', methods=['GET'])
-# def get_interactions_over_time():
-#     """Get interaction counts over time (last 7 months)"""
-#     # db = get_db()
-    
-#     try:
-#         # Get current date and calculate date 7 months ago
-#         today = datetime.now()
-#         months = []
-        
-#         # Generate last 7 months
-#         for i in range(6, -1, -1):
-#             month_date = today - timedelta(days=30 * i)
-#             month_name = month_date.strftime("%b")  # Short month name (e.g., "Jan")
-#             months.append(month_name)
-        
-#         # Query to count interactions by month
-#         interactions_by_month = []
-        
-#         for month in months:
-#             # In a real implementation, you would query the database for each month
-#             # For now, we'll use random data or mock data
-#             try:
-#                 # This is a placeholder - in a real app, you'd query by date range
-#                 count = db.interactions.count_documents({})
-#                 # Adjust count to make it look like it varies by month (for demo purposes)
-#                 adjusted_count = max(50, int(count * (0.7 + random.random() * 0.6)))
+        # Process each document
+        for doc in collection.find({}):
+            # For each document, go through all sessions
+            for session in doc.get('sessions', []):
+                total_sessions += 1
+                messages = session.get('messages', [])
                 
-#                 interactions_by_month.append({
-#                     "date": month,
-#                     "value": adjusted_count
-#                 })
-#             except Exception as e:
-#                 print(f"Error counting interactions for {month}: {e}")
-#                 # Fallback to random data
-#                 interactions_by_month.append({
-#                     "date": month,
-#                     "value": random.randint(120, 300)
-#                 })
+                # If this session has messages, count them
+                if messages and len(messages) > 0:
+                    sessions_with_messages += 1
+                    total_messages += len(messages)
         
-#         return jsonify(interactions_by_month)
-#     except Exception as e:
-#         print(f"Error fetching interactions over time: {e}")
-#         # Return mock data if DB query fails
-#         return jsonify([
-#             {"date": "Jan", "value": 120},
-#             {"date": "Feb", "value": 150},
-#             {"date": "Mar", "value": 180},
-#             {"date": "Apr", "value": 220},
-#             {"date": "May", "value": 300},
-#             {"date": "Jun", "value": 250},
-#             {"date": "Jul", "value": 280}
-#         ])
-
-# @analytics.route('/agents', methods=['GET'])
-# def get_agent_usage():
-#     """Get distribution of agent usage"""
-#     # db = get_db()
-    
-#     try:
-#         # Aggregate to count agent invocations
-#         # In a real implementation, you'd use MongoDB aggregation
+        # Calculate average messages per session (for sessions with messages)
+        avg_messages_per_session = 0
+        if sessions_with_messages > 0:
+            avg_messages_per_session = total_messages / sessions_with_messages
         
-#         # For now, we'll use mock data with a slight randomization
-#         agents = [
-#             {"name": "Search Agent", "count": random.randint(35, 45), "color": "#8b5cf6"},
-#             {"name": "Analysis Agent", "count": random.randint(25, 35), "color": "#3b82f6"},
-#             {"name": "Calculator", "count": random.randint(10, 20), "color": "#14b8a6"},
-#             {"name": "Calendar", "count": random.randint(10, 20), "color": "#f97316"}
-#         ]
-        
-#         return jsonify(agents)
-#     except Exception as e:
-#         print(f"Error fetching agent usage: {e}")
-#         # Return mock data if DB query fails
-#         return jsonify([
-#             {"name": "Search Agent", "count": 40, "color": "#8b5cf6"},
-#             {"name": "Analysis Agent", "count": 30, "color": "#3b82f6"},
-#             {"name": "Calculator", "count": 15, "color": "#14b8a6"},
-#             {"name": "Calendar", "count": 15, "color": "#f97316"}
-#         ])
-
-# @analytics.route('/stats', methods=['GET'])
-# def get_overall_stats():
-#     """Get overall dashboard statistics"""
-#     # db = get_db()
-    
-#     try:
-#         # Count total interactions
-#         total_interactions = db.interactions.count_documents({})
-        
-#         # Count unique users (in a real app, you'd have a user field to count unique values)
-#         # For now, we'll use a random number that's proportional to interactions
-#         active_users = max(50, int(total_interactions * 0.4))
-        
-#         return jsonify({
-#             'totalInteractions': 50,
-#             'activeUsers': 5
-#         })
-#     except Exception as e:
-#         print(f"Error fetching overall stats: {e}")
-#         # Return mock data if DB query fails
-#         return jsonify({
-#             'totalInteractions': 2584,
-#             'activeUsers': 1203
-#         })
+        return jsonify({
+            'totalMessages': total_messages,
+            'totalSessions': total_sessions,
+            'sessionsWithMessages': sessions_with_messages,
+            'averageMessagesPerSession': round(avg_messages_per_session, 1)
+        })
+    except Exception as e:
+        print(f"Error calculating chat message counts: {e}")
+        # Return empty data in case of error
+        return jsonify({
+            'totalMessages': 0,
+            'totalSessions': 0,
+            'sessionsWithMessages': 0,
+            'averageMessagesPerSession': 0
+        })

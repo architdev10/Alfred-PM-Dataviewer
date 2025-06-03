@@ -53,18 +53,27 @@ def get_users():
         return jsonify([]), 200
     
     user_list = []
-    for user_id in chat_data.keys():
-        user_list.append({"id": str(user_id)})
-        print(f"Found user: {user_id}")
+    
+    # Use the MongoDB collection directly to ensure we only get entities with user_id
+    collection = db_client[MONGO_CLIENT][MONGO_COLLECTION]
+    users = collection.find({"userid": {"$exists": True, "$ne": None, "$ne": ""}})
+    
+    for user in users:
+        user_id = str(user.get('userid'))
+        # Only add users with valid user_id
+        if user_id and user_id != "None":
+            user_list.append({"id": user_id})
+            print(f"Found user with valid user_id: {user_id}")
     
     return jsonify(user_list)
+
 
 @app.route('/api/users/<user_id>/sessions')
 def get_user_sessions(user_id):
     chat_data = load_chat_data()
     if not chat_data:
         return jsonify([]), 200
-    
+
     # Check if user exists in our data
     if user_id not in chat_data:
         print(f"User not found: {user_id}")
@@ -76,7 +85,14 @@ def get_user_sessions(user_id):
     # Get all sessions for this user
     for session_id in chat_data[user_id].keys():
         session_data = chat_data[user_id][session_id]
+        
+        # Check if this session uses the new schema format
+        if 'chat_history' not in session_data:
+            print(f"Skipping session {session_id} - old schema format")
+            continue
+            
         messages = session_data.get('chat_history', [])
+        
         # Calculate message count and timestamps
         message_count = len(messages)
         created_at = "Unknown"
@@ -86,15 +102,15 @@ def get_user_sessions(user_id):
             # Try to get timestamps
             if messages[0].get('timestamp'):
                 timestamp = messages[0].get('timestamp')
-                if isinstance(timestamp, dict) and 'date' in timestamp:
-                    created_at = timestamp['date']
+                if isinstance(timestamp, dict) and '$date' in timestamp:
+                    created_at = timestamp['$date']
                 else:
                     created_at = str(timestamp)
             
             if messages[-1].get('timestamp'):
                 timestamp = messages[-1].get('timestamp')
-                if isinstance(timestamp, dict) and 'date' in timestamp:
-                    last_activity = timestamp['date']
+                if isinstance(timestamp, dict) and '$date' in timestamp:
+                    last_activity = timestamp['$date']
                 else:
                     last_activity = str(timestamp)
         
@@ -104,9 +120,10 @@ def get_user_sessions(user_id):
             "createdAt": created_at,
             "lastActivity": last_activity
         })
-        print(f"Found session: {session_id} with {message_count} messages")
+        print(f"Found session with new schema: {session_id} with {message_count} messages")
     
     return jsonify(session_list)
+
 
 @app.route('/api/users/<user_id>/sessions/<session_id>')
 def get_session_chat(user_id, session_id):
@@ -131,54 +148,74 @@ def get_session_chat(user_id, session_id):
     email_thread_id = session_data.get('email_thread_id', None)
     fb_coll = db['alfred_feedback']
     
-    # build or extract message_ids
+    # Build or extract message_ids
     msg_ids = [m.get('message_id') or f"{user_id}_{session_id}_{i}" for i, m in enumerate(raw_msgs)]
-    print(f"Message IDs for session {session_id}: {msg_ids}")
     
-    # Ensure a DB entry exists for each message with default feedback and comments
-    for msg_id in msg_ids:
-        fb_coll.update_one(
-            {'message_id': msg_id},
-            {'$setOnInsert': {'message_id': msg_id, 'feedback': None, 'comments': []}},
-            upsert=True
-        )
+    # Fetch existing feedback documents
+    # Try looking up feedback by both _id and message_id fields
+    fb_docs_by_id = list(fb_coll.find({'_id': {'$in': msg_ids}}))
+    fb_docs_by_msg_id = list(fb_coll.find({'message_id': {'$in': msg_ids}}))
     
-    # Fetch all feedback documents for these messages
-    fb_docs = list(fb_coll.find({'message_id': {'$in': msg_ids}}))
-    print(f"Found {len(fb_docs)} feedback documents in MongoDB")
-    for doc in fb_docs:
-        print(f"Feedback doc: {doc['message_id']} - feedback: {doc.get('feedback')}, comments: {doc.get('comments')}")
+    # Combine the results, prioritizing _id matches
+    fb_map = {doc['_id']: doc for doc in fb_docs_by_id}
     
-    # Map feedback docs by message_id
-    fb_map = {doc['message_id']: doc for doc in fb_docs}
+    # Add message_id matches only if _id match doesn't exist
+    for doc in fb_docs_by_msg_id:
+        msg_id = doc['message_id']
+        if msg_id not in fb_map:
+            fb_map[msg_id] = doc
+    
+    print(f"Found {len(fb_map)} feedback documents for this session")
     
     # Merge messages with feedback
     merged_msgs = []
     for i, m in enumerate(raw_msgs):
-        msg_id = m.get('message_id') or msg_ids[i]
+        msg_id = m.get('message_id')
+        if not msg_id:
+            msg_id = f"{user_id}_{session_id}_{i}"
+            m['message_id'] = msg_id  # Set it for future use
+            
         ts = m.get('timestamp', 'Unknown time')
         if isinstance(ts, dict) and 'date' in ts:
             ts = ts['date']
         # Normalize timestamp to ISO string if datetime object
         if hasattr(ts, 'isoformat'):
             ts = ts.isoformat()
+
+        # Get feedback data for this message
+        fb_doc = fb_map.get(msg_id, {})
+        feedback = fb_doc.get('feedback')
+        comments = fb_doc.get('comments', [])
         
-        # Get feedback doc or empty dict if not found
-        doc_fb = fb_map.get(msg_id, {})
-        
-        # Create merged message with all data
-        msg_data = {
-            'id': msg_id,
-            'role': m.get('role', 'unknown'),
-            'content': m.get('content', ''),
-            'timestamp': ts,
-            'feedback': doc_fb.get('feedback'),
-            'comments': doc_fb.get('comments', []),
-            'sequence': m.get('sequence', i)
-        }
-        
-        print(f"Merged message {i}: {msg_id} - role: {msg_data['role']}, comments: {msg_data['comments']}")
-        merged_msgs.append(msg_data)
+        for role in m.get('messages', []):
+            role_data = role.get('role')
+            content = role.get('content')
+            
+            # Only include function_name and function_response for assistant messages
+            function_name = None
+            function_response = None
+            
+            if role_data == 'assistant':
+                # Look for function messages
+                for func_msg in m.get('messages', []):
+                    if func_msg.get('role') == 'function':
+                        function_name = func_msg.get('name')
+                        function_response = func_msg.get('content')
+            
+            msg_data = {
+                'id': msg_id,
+                'message_id': msg_id,  # Include both for compatibility
+                'role': role_data,
+                'content': content,
+                'timestamp': ts,
+                'sequence': m.get('sequence', i),
+                'feedback': feedback,
+                'comments': comments,
+                'function_name': function_name,
+                'function_response': function_response
+            }
+            merged_msgs.append(msg_data)
+    
     # Sort messages by sequence number first (most reliable), then by timestamp as fallback
     try:
         # First try to sort by sequence number which is most reliable
@@ -200,6 +237,122 @@ def get_session_chat(user_id, session_id):
         'email_thread_id': email_thread_id
     })
 
+@app.route('/api/interactions')
+def get_interactions():
+    chat_data = load_chat_data()
+    if not chat_data:
+        print("No chat data available, returning empty list")
+        return jsonify([]), 200
+    
+    interactions = []
+    try:
+        for user_id, sessions in chat_data.items():
+            for session_id, session_data in sessions.items():
+                # Check if session uses the new schema format
+                if 'chat_history' not in session_data:
+                    continue
+                    
+                chat_history = session_data['chat_history']
+                
+                if not chat_history or not isinstance(chat_history, list):
+                    continue
+                
+                print(f"Processing session {session_id} with {len(chat_history)} chat history items")
+                
+                # Process each message in the chat history
+                for message in chat_history:
+                    # Validate message structure
+                    if not isinstance(message, dict) or 'messages' not in message:
+                        continue
+                    
+                    message_id = message.get('message_id')
+                    timestamp = message.get('timestamp')
+                    messages_list = message.get('messages', [])
+                    
+                    # Ensure timestamp is a string
+                    if isinstance(timestamp, dict) and '$date' in timestamp:
+                        timestamp = timestamp['$date']
+                    elif hasattr(timestamp, 'isoformat'):  # Python datetime object
+                        timestamp = timestamp.isoformat()
+                    
+                    # Find user and assistant messages
+                    user_content = None
+                    assistant_content = None
+                    function_name = None
+                    function_response = None
+                    
+                    for msg in messages_list:
+                        if msg.get('role') == 'user':
+                            user_content = msg.get('content')
+                        elif msg.get('role') == 'assistant':
+                            assistant_content = msg.get('content')
+                        elif msg.get('role') == 'function':
+                            function_name = msg.get('name')
+                            function_response = msg.get('content')
+                    
+                    # Only add to interactions if we have both user and assistant content
+                    if user_content and assistant_content:
+                        interactions.append({
+                            'id': message_id,  # Keep using 'id' for frontend compatibility
+                            'userPrompt': user_content,
+                            'aiResponse': assistant_content,
+                            'timestamp': str(timestamp),
+                            'agents': [],
+                            'function_name': function_name,
+                            'function_response': function_response,
+                            'rating': None,
+                            'comments': [],
+                            'user': {
+                                'name': user_id,
+                                'avatar': ''
+                            }
+                        })
+    
+    except Exception as e:
+        print(f"Error formatting interactions: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Merge stored feedback/comments from DB
+    try:
+        fb_coll = db['alfred_feedback']
+        
+        # Create a list of message IDs to query
+        msg_ids = [item['id'] for item in interactions if item['id']]
+        
+        if msg_ids:
+            # Try looking up feedback by both _id and message_id fields
+            fb_docs_by_id = list(fb_coll.find({'_id': {'$in': msg_ids}}))
+            fb_docs_by_msg_id = list(fb_coll.find({'message_id': {'$in': msg_ids}}))
+            
+            # Combine the results, prioritizing _id matches
+            fb_map = {doc['_id']: doc for doc in fb_docs_by_id}
+            
+            # Add message_id matches only if _id match doesn't exist
+            for doc in fb_docs_by_msg_id:
+                msg_id = doc['message_id']
+                if msg_id not in fb_map:
+                    fb_map[msg_id] = doc
+            
+            # Update interactions with feedback data
+            for item in interactions:
+                if not item['id']:
+                    continue
+                    
+                doc = fb_map.get(item['id'], {})
+                # override defaults if present
+                item['rating'] = doc.get('feedback', item.get('rating'))
+                item['comments'] = doc.get('comments', item.get('comments', []))
+                
+                print(f"Message {item['id']}: rating={item['rating']}, comments={item['comments']}")
+    except Exception as e:
+        print(f"Error merging feedback: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print(f"Returning {len(interactions)} interactions with persisted feedback")
+    return jsonify(interactions)
+
 @app.route('/api/chat_histories')
 def chat_histories():
     chat_data = load_chat_data()
@@ -208,142 +361,143 @@ def chat_histories():
     
     return jsonify(chat_data)
 
-@app.route('/api/interactions')
-def get_interactions():
-    chat_data = load_chat_data()
-    if not chat_data:  # Empty dict or None
-        # Return empty list instead of error to avoid frontend issues
-        print("No chat data available, returning empty list")
-        return jsonify([]), 200
-    
-    # Format data for the frontend interactions component
-    interactions = []
-    try:
-        for user_id, sessions in chat_data.items():
-            for session_id, session_data in sessions.items():
-                messages = session_data.get('chat_history', [])
-                for i, message in enumerate(messages):
-                    if i + 1 < len(messages):
-                        if message.get('role') == 'user' and messages[i+1].get('role') == 'assistant':
-                            # Format timestamp if available
-                            timestamp = message.get('timestamp', 'Unknown time')
-                            if isinstance(timestamp, dict) and 'date' in timestamp:
-                                timestamp = timestamp['date']
-                                
-                            interactions.append({
-                                'id': message.get('message_id'),
-                                'userPrompt': message.get('content', ''),
-                                'aiResponse': messages[i+1].get('content', ''),
-                                'timestamp': timestamp,
-                                'agents': message.get('agents', []),
-                                'rating': None,
-                                'comments': [],
-                                'user': {
-                                    'name': user_id,
-                                    'avatar': ''
-                                }
-                            })
-    except Exception as e:
-        print(f"Error formatting interactions: {e}")
-    
-    # Merge stored feedback/comments from DB
-    fb_coll = db['alfred_feedback']
-    ids = [item['id'] for item in interactions]
-    fb_docs = fb_coll.find({'message_id': {'$in': ids}})
-    fb_map = {doc['message_id']: doc for doc in fb_docs}
-    for item in interactions:
-        doc = fb_map.get(item['id'], {})
-        # override defaults if present
-        item['rating'] = doc.get('feedback', item.get('rating'))
-        item['comments'] = doc.get('comments', item.get('comments'))
-    print(f"Returning {len(interactions)} interactions with persisted feedback")
-    return jsonify(interactions)
-
 @app.route('/api/comments', methods=['POST'])
 def add_comment():
     data = request.get_json()
-    # Standardize on message_id
-    message_id = data.get('message_id')
-    # For backward compatibility, still accept messageId or interactionId
-    if not message_id:
-        message_id = data.get('messageId') or data.get('interactionId')
+    print(f"Received comment data: {data}")
+    
+    # Get the message_id which will now be used as _id
+    doc_id = data.get('message_id')
+        
     comment = data.get('comment')
     rating = data.get('rating')
-    # Determine which fields were sent
     has_comment = 'comment' in data
     has_rating = 'rating' in data
+    
     # Basic validation
-    if not message_id:
+    if not doc_id:
         return jsonify({'error': 'message_id required'}), 400
     if has_rating and rating not in ('good','bad','neutral', None):
         return jsonify({'error': 'Invalid rating value'}), 400
     if has_comment and comment is not None and not isinstance(comment, str):
         return jsonify({'error': 'Comment must be a string'}), 400
 
-    # Use shared DB client
     collection = db['alfred_feedback']
 
     try:
-        # Build update operations
         ops = {}
         if has_comment and comment:
             ops.setdefault('$push', {})['comments'] = comment
         if has_rating:
-            # Save rating even if null to allow clearing
             ops.setdefault('$set', {})['feedback'] = rating
-        # Ensure document exists: set message_id on insert
-        ops.setdefault('$setOnInsert', {})['message_id'] = message_id
-        collection.update_one({'message_id': message_id}, ops, upsert=True)
+            
+        # Only create a new document if we actually have changes to make
+        if ops:
+            # Find the message in email_threads to copy its data
+            message_data = get_message_data(doc_id)
+            
+            # Set the operation to create new documents with data from email_threads
+            if message_data:
+                # For each role, add the corresponding content
+                for role_data in message_data.get('roles', []):
+                    role = role_data.get('role')
+                    if role == 'user':
+                        ops.setdefault('$setOnInsert', {})['user'] = role_data.get('content', '')
+                    elif role == 'assistant':
+                        ops.setdefault('$setOnInsert', {})['assistant'] = role_data.get('content', '')
+                    elif role == 'function':
+                        ops.setdefault('$setOnInsert', {})['function_name'] = role_data.get('name', '')
+                        ops.setdefault('$setOnInsert', {})['function_response'] = role_data.get('content', '')
+            
+            # Use update with upsert to create or modify the document
+            result = collection.update_one(
+                {'_id': doc_id},  # Use message_id as _id
+                ops,
+                upsert=True
+            )
 
         return jsonify({'success': True}), 200
     except Exception as e:
         print(f"Error saving comment: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+def get_message_data(message_id):
+    """
+    Extracts message data from email_threads collection based on message_id
+    """
+    try:
+        # Load chat data
+        chat_data = load_chat_data()
+        
+        # Search for the message with the given ID
+        for user_id, user_data in chat_data.items():
+            for session_id, session_data in user_data.get('sessions', {}).items():
+                chat_history = session_data.get('chat_history', [])
+                
+                for chat_item in chat_history:
+                    if chat_item.get('message_id') == message_id:
+                        # Found the message
+                        return {
+                            'timestamp': chat_item.get('timestamp'),
+                            'roles': [
+                                {
+                                    'role': msg.get('role'),
+                                    'content': msg.get('content', ''),
+                                    'name': msg.get('name', '') if msg.get('role') == 'function' else None
+                                }
+                                for msg in chat_item.get('messages', [])
+                            ]
+                        }
+        
+        # Message not found
+        print(f"Message with ID {message_id} not found in chat data")
+        return {}
+    
+    except Exception as e:
+        print(f"Error retrieving message data: {e}")
+        return {}
+
 @app.route('/api/message/<message_id>')
 def get_message_feedback(message_id):
     try:
-        # Parse user_id and session_id from message_id
-        parts = message_id.split('_')
-        if len(parts) < 2:
-            print(f"Invalid message ID format: {message_id}")
-            return jsonify({"error": "Invalid message ID format"}), 400
-            
-        user_id = parts[0]
-        session_id = parts[1]
-        
-        # Query feedback collection
+        # Query feedback collection using message_id as _id
         fb_coll = db['alfred_feedback']
-        doc = fb_coll.find_one({'message_id': message_id})
-        print(f"Fetched feedback for message {message_id}: {doc}")
+        doc = fb_coll.find_one({'_id': message_id})
         
-        # Fetch original message data
-        chat_data = load_chat_data()
-        session_data = chat_data.get(user_id, {}).get(session_id, {})
-        messages = session_data.get('chat_history', [])
-        message_obj = next((m for m in messages if m.get('message_id') == message_id), None)
-        role = message_obj.get('role') if message_obj else None
-        content = message_obj.get('content') if message_obj else None
-        timestamp = message_obj.get('timestamp') if message_obj else None
+        if not doc:
+            # If no feedback document exists with the message_id as _id,
+            # try looking it up by message_id field (for backward compatibility)
+            doc = fb_coll.find_one({'message_id': message_id})
         
-        # Prepare combined response
-        rating = doc.get('feedback') if doc else None
-        comments = doc.get('comments', []) if doc else []
+        # Get original message data
+        message_data = get_message_data(message_id)
         
-        return jsonify({
+        # Prepare response, merging feedback data with original message data
+        response = {
             'id': message_id,
-            'role': role,
-            'content': content,
-            'timestamp': timestamp,
-            'feedback': rating,
-            'comments': comments
-        }), 200
+            'feedback': doc.get('feedback') if doc else None,
+            'comments': doc.get('comments', []) if doc else [],
+            'timestamp': message_data.get('timestamp')
+        }
+        
+        # Add role-specific content if available
+        for role_data in message_data.get('roles', []):
+            role = role_data.get('role')
+            if role == 'user':
+                response['user'] = role_data.get('content')
+            elif role == 'assistant':
+                response['assistant'] = role_data.get('content')
+            elif role == 'function':
+                response['function_name'] = role_data.get('name')
+                response['function_response'] = role_data.get('content')
+        
+        return jsonify(response), 200
+    
     except Exception as e:
         print(f"Error retrieving message feedback: {e}")
         return jsonify({"error": str(e)}), 500
 
-
-# Enable CORS
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
