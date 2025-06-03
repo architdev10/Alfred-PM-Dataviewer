@@ -183,11 +183,11 @@ export default function Data() {
                 <TableBody>
                   {loading ? (
                     <TableRow>
-                      <TableCell colSpan={10}>Loading...</TableCell>
+                      <TableCell colSpan={8}>Loading...</TableCell>
                     </TableRow>
                   ) : error ? (
                     <TableRow>
-                      <TableCell colSpan={10}>{error}</TableCell>
+                      <TableCell colSpan={8}>{error}</TableCell>
                     </TableRow>
                   ) : (
                     processedData.map((item) => (

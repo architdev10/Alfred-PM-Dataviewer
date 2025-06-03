@@ -1,0 +1,152 @@
+- Use docker for deployement 
+- Port of frontend - 8080
+- Port of backend - 3002
+- Py version - 3.12.X
+- db.py - has the routes to connect to the email_threads database, fetch the interactios, and then add it to a json file. 
+- app.py - IMports db elements and has routes to the frontend (to get comments, feedbacks), db (to get interactions, sessions, etc)
+
+- Backend start - python app.py
+- Frontend start - npm run dev
+
+# Frontend Architecture Documentation
+
+## 1. Core Structure
+
+The application is built using React 18 with TypeScript and follows a modern component-based architecture. The main entry points are src/main.tsx (application entry), src/App.tsx (root component), and index.html (HTML entry point).
+
+The codebase is organized into several key directories:
+- components/: Reusable UI components
+- pages/: Main application pages
+- context/: React context providers
+- lib/: Utility functions
+- styles/: Global styles
+- hooks/: Custom React hooks
+
+## 2. Component Architecture
+
+The application uses a layered component architecture:
+
+Layout Components (src/components/layout/):
+- Layout.tsx: Main layout wrapper handling sidebar and content area
+- Header.tsx: Application header with search and navigation
+- Sidebar.tsx: Navigation sidebar with collapsible menu
+
+UI Components (src/components/ui/):
+- Base components: buttons, cards, inputs, selects
+- Complex components: command palette, navigation menus, resizable panels, breadcrumbs
+
+Interaction Components (src/components/interactions/):
+- DataViewer.tsx: Core component for conversation display
+- ResponseCard.tsx: Individual message display component
+
+## 3. Pages
+
+The application has several main pages:
+- Dashboard.tsx: Main analytics dashboard
+- Interactions.tsx: Conversation viewer with filtering
+- Settings.tsx: Application settings
+- NotFound.tsx: 404 error page
+
+## 4. State Management
+
+State management is handled through:
+- React Context for global state (filters, theme, auth)
+- React Query for server state management
+- Local state for component-specific data
+
+## 5. Styling System
+
+The application uses:
+- Tailwind CSS for utility-first styling
+- Custom CSS variables for theming
+- Component-specific styles where needed
+
+## 6. Key Features
+
+1. Conversation Management:
+- Hierarchical and flat view modes
+- Advanced filtering system
+- Real-time updates
+- Comment and feedback system
+
+2. UI/UX Features:
+- Responsive design
+- Dark/light theme support
+- Loading states and animations
+- Error handling
+
+3. Performance Optimizations:
+- React Query for data caching
+- Lazy loading
+- Optimized re-renders
+- Efficient state management
+
+## 7. Dependencies
+
+Core Dependencies:
+- React 18
+- TypeScript
+- React Router
+- React Query
+- Tailwind CSS
+- shadcn/ui
+- Lucide Icons
+- date-fns
+
+Development Dependencies:
+- Vite
+- ESLint
+- TypeScript
+- PostCSS
+- Tailwind CSS
+
+## 8. Code Organization
+
+The codebase follows these conventions:
+- Components use PascalCase (DataViewer.tsx)
+- Utilities use camelCase (utils.ts)
+- Styles use kebab-case (scroll-fix.css)
+- TypeScript interfaces for all props
+- Modular component structure
+
+## 9. Best Practices
+
+The application implements:
+1. Type Safety:
+- Full TypeScript implementation
+- Interface definitions
+- Strict type checking
+
+2. Component Design:
+- Atomic design principles
+- Reusable components
+- Proper prop typing
+
+3. Performance:
+- Memoization
+- Efficient state updates
+- Optimized rendering
+
+4. Accessibility:
+- ARIA labels
+- Keyboard navigation
+- Screen reader support
+
+## 10. Development Workflow
+
+The development environment includes:
+- Vite for fast development
+- Hot module replacement
+- TypeScript compilation
+- ESLint for code quality
+- Tailwind CSS processing
+
+## 11. Build and Deployment
+
+The application uses:
+- Vite for building
+- Docker for containerization
+- Environment-based configuration
+- Optimized production builds
+
+This architecture provides a solid foundation for a modern, maintainable, and scalable React application with a focus on performance, type safety, and developer experience. 
